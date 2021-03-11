@@ -12,7 +12,9 @@ tags: hooks
 <br />
   [1. Check whether hooks are set within system functions](#check-whether-hooks-are-set-within-system-functions)
 <br />
-  [2. Check user clicks via mouse hooks](#check-user-clicks-via-mouse-hooks)
+  [2. Check for incorrectly hooked functions](#check-incorrectly-hooked-functions)
+<br />
+  [3. Check user clicks via mouse hooks](#check-user-clicks-via-mouse-hooks)
 <br />
   [Signature recommendations](#signature-recommendations)
 <br />
@@ -29,9 +31,9 @@ Techniques described here make use of hooks either to detect user presence or as
 
 <br />
 <h3><a class="a-dummy" name="check-whether-hooks-are-set-within-system-functions">1. Check whether hooks are set within system functions</a></h3>
-Malware reads memory at specific addresses to check if the Windows API functions are hooked.
+Malware reads memory at specific addresses to check if Windows API functions are hooked.
 <br />
-This method is based on the fact, that emulation environments are most likely to hook these functions to be able to gather data and statistics during emulation.
+This method is based on the fact, that emulation environments are most likely to hook these functions to be able to gather data and statistics during an emulation.
 
 <hr class="space">
 
@@ -159,7 +161,65 @@ for (WORD i = 0; i < pinh->FileHeader.NumberOfSections; i++) {
 <hr class="space">
 
 <br />
-<h3><a class="a-dummy" name="check-user-clicks-via-mouse-hooks">2. Check user clicks via mouse hooks</a></h3>
+<h3><a class="a-dummy" name="check-incorrectly-hooked-functions">2. Check for incorrectly hooked functions</a></h3>
+There are more than 400 Nt-functions in ntdll.dll that are usually hooked in sandboxes. In such a large list
+there is enough space for different kind of mistakes.
+An example of such a mistake is a lack of neccessary checks for all arguments in a hooked function. This case is described 
+in our article "<a href="timing.html#call-hooked-function-with-invalid-arguments">Timing: Call a potentially hooked delay function with invalid arguments evasions</a>".
+<br />
+Another kind of mistake is discrepancy in the number of arguments in a hooked  
+and original functions. If a function hooked incorrectly, in kernel mode this may lead operating system to crash. 
+Incorrect user-mode hooks are not so harmfull, however they may lead an analyzed application to crash or can be
+easily detected.
+For example, lets look into the <tt>NtLoadKeyEx</tt> function. Natively it has 8 arguments:
+    
+    ; Exported entry 337. NtLoadKeyEx
+    ; __stdcall NtLoadKeyEx(x, x, x, x, x, x, x, x)
+    public _NtLoadKeyEx@32
+    _NtLoadKeyEx@32 proc near
+    
+However, in Cuckoo monitor <tt>NtLoadKeyEx</tt> declaration there are only
+<a href="https://github.com/cuckoosandbox/monitor/blob/7c5854fae12e1f01f56eab2db4008148c790cc7a/sigs/registry_native.rst#ntloadkeyex">4 arguments</a>:
+
+    *  POBJECT_ATTRIBUTES TargetKey
+    *  POBJECT_ATTRIBUTES SourceFile
+    ** ULONG Flags flags
+    ** HANDLE TrustClassKey trust_class_key
+    
+For some reason we can find the usage of this wrong prototype in other sources too. For example, 
+<a href="https://github.com/ctxis/capemon/blob/e541d7ccd41d519de4198f7965c5b584d2a66ed6/hooks.h#L710">CAPE sandbox</a> contains the same error:
+
+{% highlight c %}
+extern HOOKDEF(NTSTATUS, WINAPI, NtLoadKeyEx,
+    __in      POBJECT_ATTRIBUTES TargetKey,
+    __in      POBJECT_ATTRIBUTES SourceFile,
+    __in      ULONG Flags,
+    __in_opt  HANDLE TrustClassKey
+);
+{% endhighlight %}
+
+After the call of the incorrectly hooked function the stack pointer value will be invalid.  This fact can be used to 
+detect a sandbox. We can store ESP value before the call of a potentially hooked function and compare it with the value 
+after the function returns. If the values are different it means that the function is hooked incorrectly.
+
+<b>Code sample</b>
+<p></p>
+{% highlight c %}
+DWORD old_esp, new_esp;
+_asm mov old_esp, ESP
+NtLoadKeyEx(0, 0, 0, 0, 0, 0, 0, 0);
+_asm mov new_esp, ESP
+_asm mov ESP, old_esp
+
+if (old_esp != new_esp)
+    printf("Sandbox detected!");
+{% endhighlight %}
+
+
+<hr class="space">
+
+<br />
+<h3><a class="a-dummy" name="check-user-clicks-via-mouse-hooks">3. Check user clicks via mouse hooks</a></h3>
 This technique is described <a href="https://www.fireeye.com/content/dam/fireeye-www/current-threats/pdfs/pf/file/fireeye-hot-knives-through-butter.pdf">by this link</a> (p.4, p.7).
 
 <hr class="space">
@@ -246,5 +306,4 @@ t.join();
 
 Credits go to user <tt>dtm</tt> from  <a href="https://0x00sec.org/">0x00sec.org</a> forum.
 
-Though Check Point tool InviZzzible has them all implemented, due to modular structure of the code it would require more space to show a code sample from this tool for the same purposes. That's why we've decided to use other great open-source projects for examples throughout the encyclopedia.
-
+Due to modular code structure of the Check Point's tool called InviZzzible it would require more space to show a code sample from this tool for the same purposes. That's why we've decided to use other great open-source projects for examples throughout the encyclopedia.
